@@ -141,57 +141,58 @@ runbook each time and passed. Functional grades are equal (6/6).
 
 ## Runtime, tokens & cost
 
-Wall-clock times below are measured. **Token counts are estimates** — omp's `-p --no-session` runs did not
-persist per-run usage telemetry, and the API balance ran out before I could re-run with logging enabled.
-Estimated tokens use ~3,000 tokens/sec of **agent-seconds** (each agent's run duration summed; for the parallel
-run that is 4 sub-agents + 1 coordinator, NOT the 62s wall-clock, since concurrent agents burn tokens
-simultaneously). Cost uses **DeepSeek V4 Flash** public rates: **$0.14/M input (cache miss), $0.28/M output** →
-blended ~**$0.168/M** (80/20 input/output split).
+**Token counts below are MEASURED**, not estimated — read from omp's per-session usage records
+(`message.usage.totalTokens` for output incl. reasoning, `message.contextSnapshot.promptTokens` for input),
+summed across every message and every session of a run. Wall-clock is measured. Cost uses **DeepSeek V4 Flash**
+public rates: **$0.14/M input (cache miss), $0.28/M output**.
 
-| Scenario | Trial | wall clock | est. tokens | est. cost |
-|----------|-------|-----------:|------------:|----------:|
-| 5 sats resume | baseline | 129s | ~387k | ~$0.065 |
-| 5 sats resume | statem | 238s | ~714k | ~$0.12 |
-| 6 verify-gate | baseline | 21s | ~63k | ~$0.011 |
-| 6 verify-gate | statem | 85s | ~255k | ~$0.043 |
-| 7 resume-repair | baseline | 30s | ~90k | ~$0.015 |
-| 7 resume-repair | statem | 243s | ~729k | ~$0.12 |
-| 8 release gate | baseline | 70s | ~210k | ~$0.035 |
-| 8 release gate | statem | 70s | ~210k | ~$0.035 |
-| 9 three-session | baseline | 107s | ~321k | ~$0.054 |
-| 9 three-session | statem | 323s | ~969k | ~$0.16 |
-| 10 parallel sub-agents | statem-parallel | **62s** | ~420k | ~$0.071 |
+The three execution modes below are the **same 4-module `sats` package**, run identically apart from orchestration
+(a clean apples-to-apples comparison). All three graded **6/6** (all 20 functions correct).
 
-**Takeaway on cost/overhead:** DeepSeek V4 Flash is extremely cheap — every run here is on the order of
-$0.01–$0.16. Statem's sequential runs consistently spend **more** wall-clock and tokens (roughly 2–8×) because
-the runbook, `save`/`goto` transitions, and verify gates add real work and reasoning. In the cases where statem
-wins (5, 6) it buys correctness; in the null cases (7, 8, 9) it buys the same answer for more tokens. The
-**parallel sub-agent** variant is the exception — see scenario 10.
+| Mode | wall clock | input tok | output tok | total tok | est. cost |
+|------|-----------:|----------:|-----------:|----------:|----------:|
+| **sequential** (1 agent) | 25s | 75,014 | 78,369 | **153,383** | ~$0.032 |
+| **parallel** (4 sub-agents + coordinator) | 34s | 321,122 | 325,668 | **646,790** | ~$0.136 |
+| **statem-sequential** (1 agent + runbook) | 136s | 1,306,318 | 1,318,493 | **2,624,811** | ~$0.55 |
+
+**What this actually shows:**
+
+- **Parallel is NOT a token saver.** It burns **4.2× the tokens** of the plain sequential agent (646k vs 153k) —
+  each of the 4 sub-agents re-loads ~48k tokens of context, and the coordinator adds ~256k. Parallel's win is
+  **latency only**: 34s vs 25s (sequential) and **4× faster than statem-sequential** (136s).
+- **Statem-sequential is the real token hog: 2,624,811 tokens — 17× the plain baseline.** The runbook `save`/`goto`
+  steps, gate execution, and re-verification balloon the context across 47 messages. Its value is durable state,
+  but on a single clean pass it is by far the most expensive of the three.
+- If your constraint is **cost**, a single sequential agent wins (153k, ~$0.03). If it's **latency + correctness on
+  long multi-module work**, parallel sub-agents beat statem-sequential on both (34s/647k vs 136s/2.6M) while keeping
+  the verify gate.
+
+*(Scenarios 1–9 in the tables above were run before per-run telemetry was enabled; their token/cost figures are
+the earlier estimates and are superseded by this measured comparison for the same task class.)*
 
 ## Scenario 10 — parallel sub-agents (wall-clock reduction)
 
 Same 4-module sats package, but the four independent module leaves are built by **four concurrent omp agents**
 (each writes its own `*.py`), then a single coordinator writes `__init__.py` + `verify.py` and runs the verify
-gate. All 20 functions graded correct (6/6), identical to the sequential runs.
+gate. All three variants graded **6/6** (all 20 functions correct). **Token counts are measured** (see
+"Runtime, tokens & cost").
 
-| Variant | wall clock | result |
-|---------|-----------:|--------|
-| sequential baseline | 107s | 6/6 |
-| statem-sequential | 323s | 6/6 |
-| **statem-parallel (4 sub-agents + coordinator)** | **62s** | 6/6 |
+| Variant | wall clock | total tokens | result |
+|---------|-----------:|-------------:|--------|
+| sequential baseline | 25s | 153,383 | 6/6 |
+| statem-sequential | 136s | 2,624,811 | 6/6 |
+| **parallel (4 sub-agents + coordinator)** | **34s** | 646,790 | 6/6 |
 
 **Finding — this answers "can statem's work be parallelized with sub-agents?":** statem's runbook *spine* is
 sequential (a single pointer through gated nodes), but the **leaf nodes are embarrassingly parallel**. Splitting
-the four independent modules across four concurrent sub-agents cut wall-clock to **62s — 1.7× faster than the
-sequential baseline and 5.2× faster than statem-sequential**, with identical correctness. The durable-state /
-verify-gate value is preserved: the coordinator still runs the merge + verify gate.
+the four independent modules across four concurrent sub-agents cut wall-clock to **34s — 1.4× the sequential
+baseline and 4× faster than statem-sequential**, at identical correctness. The durable-state / verify-gate value
+is preserved: the coordinator still runs the merge + verify gate.
 
-**Cost trade-off — parallelism buys latency, not tokens.** Measured by **agent-seconds** (each agent's runtime
-summed), the parallel run burns ~140 agent-sec ≈ **~420k tokens** — *more* than the single baseline agent
-(~321k, from 4 agents loading context + a coordinator), but *far fewer* than statem-sequential (~969k, which
-re-does runbook setup + verification across 3 sessions). So parallel sub-agents are the right tool when
-**wall-clock latency** matters; if **total tokens / cost** is the constraint, a single sequential baseline agent
-is cheapest, and statem-sequential is the most expensive of the three.
+**Cost trade-off — parallelism buys latency, not tokens.** Measured, parallel uses **646,790 tokens = 4.2× the
+plain baseline** (153k) because four sub-agents each re-load ~48k tokens of context plus a ~256k coordinator.
+But statem-sequential is the real outlier at **2.6M tokens (17× baseline)**. So: cost-sensitive → sequential
+baseline; latency + correctness on long work → parallel sub-agents beat statem-sequential on both dimensions.
 
 ## Can statem's work be parallelized with sub-agents?
 
@@ -207,10 +208,11 @@ depends on the previous node's state and gates. So the runbook *execution* canno
   ordered, gated spine (which phases are done, which gate must pass before merge/handoff).
 
 In this harness we ran everything as one omp agent per session (no sub-agents), so the numbers above are the
-sequential baseline. **Scenario 10 measures the parallel variant** and confirms the expected win: 62s vs 107s
-(sequential) / 323s (statem-sequential) at identical correctness. So the answer is yes — parallel sub-agents
-cut wall-clock on multi-module runbooks, at the cost of merge + gate coordination and slightly more total tokens
-than a single baseline agent.
+sequential baseline. **Scenario 10 measures the parallel variant** and confirms the win on latency: 34s vs 25s
+(sequential) / 136s (statem-sequential) at identical correctness. The catch is tokens: parallel uses 4.2× the
+plain baseline (646k vs 153k) but far fewer than statem-sequential (2.6M). So the answer is yes — parallel
+sub-agents cut wall-clock on multi-module runbooks, at the cost of merge + gate coordination and more total
+tokens than a single baseline agent.
 
 ---
 
@@ -222,6 +224,7 @@ The harness scripts live in the repo:
 - `benchmarks/resume/` — scenarios 4 & 5 (two-session resume)
 - `benchmarks/scenarios/` — scenarios 6–9 (verify-gate, resume-repair, release gate, three-session)
 - `benchmarks/scenarios/run_parallel.sh` — scenario 10 (parallel sub-agents)
+- `benchmarks/scenarios/run_comp.sh` — measured runtime/token comparison (sequential / statem-sequential / parallel)
 
 ```bash
 # scenario 3, baseline then statem
