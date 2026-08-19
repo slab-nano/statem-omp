@@ -2,28 +2,35 @@
 # statem CLI launcher for the omp plugin.
 # Resolves the statem Python package in order of preference:
 #   1. STATEM_REPO (explicit override)
-#   2. an already-installed `statem` on PATH (skip this script itself)
-#   3. the statem package bundled in this plugin repo
+#   2. the statem package bundled in this plugin repo
+#   3. an already-installed `statem` on PATH (skip this script itself)
 #   4. an importable `statem` in the current Python environment
+#
+# The launcher never changes the working directory, so relative paths passed as
+# arguments resolve against the caller's cwd. The bundled package is exposed via
+# PYTHONPATH rather than cd.
 set -euo pipefail
+
+# Resolve the real script path (handles symlinks like ~/.local/bin/statem -> plugin bin/statem).
+SCRIPT_SRC="${BASH_SOURCE[0]}"
+SCRIPT="$(readlink -f "${SCRIPT_SRC}" 2>/dev/null || echo "${SCRIPT_SRC}")"
+PLUGIN_ROOT="$(cd "$(dirname "${SCRIPT}")/.." && pwd)"
 
 # 1. Explicit override.
 if [[ -n "${STATEM_REPO:-}" && -f "${STATEM_REPO}/statem/__main__.py" ]]; then
-  cd "${STATEM_REPO}"
-  exec python3 -m statem "$@"
+  PYTHONPATH="${STATEM_REPO}${PYTHONPATH:+:${PYTHONPATH}}" python3 -m statem "$@"
+  exit $?
 fi
 
-# 2. Already on PATH (not this script).
-SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if command -v statem >/dev/null 2>&1 && [[ "$(command -v statem)" != "${SELF}/statem" ]]; then
-  exec statem "$@"
-fi
-
-# 3. Bundled package in this plugin repo (plugin_root/statem).
-PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# 2. Bundled package in this plugin repo.
 if [[ -f "${PLUGIN_ROOT}/statem/__main__.py" ]]; then
-  cd "${PLUGIN_ROOT}"
-  exec python3 -m statem "$@"
+  PYTHONPATH="${PLUGIN_ROOT}${PYTHONPATH:+:${PYTHONPATH}}" python3 -m statem "$@"
+  exit $?
+fi
+
+# 3. Already on PATH (not this script).
+if command -v statem >/dev/null 2>&1 && [[ "$(command -v statem)" != "${SCRIPT}" ]]; then
+  exec statem "$@"
 fi
 
 # 4. Importable in the environment.
