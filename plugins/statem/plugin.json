@@ -1,0 +1,24 @@
+{
+  "name": "statem",
+  "version": "0.1.0",
+  "description": "Stateful runbooks for long-running omp agents using the statem CLI.",
+  "author": {
+    "name": "statem omp maintainers"
+  },
+  "license": "Apache-2.0",
+  "keywords": ["agents", "state-machine", "runbook", "cli", "omp"],
+  "interface": {
+    "displayName": "Statem",
+    "shortDescription": "Stateful runbooks for long agent runs.",
+    "longDescription": "Use the statem CLI to create, validate, start, resume, inspect, and transition through stateful runbooks for long-running agent work inside omp.",
+    "developerName": "statem omp maintainers",
+    "category": "development",
+    "capabilities": ["Interactive", "Write"],
+    "defaultPrompt": [
+      "Create a statem runbook for this task.",
+      "Resume my current statem run.",
+      "Review this statem spec."
+    ],
+    "brandColor": "#2563EB"
+  }
+}

@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# statem CLI launcher for the omp plugin.
+# Resolves the statem Python package in order of preference:
+#   1. STATEM_REPO (explicit override)
+#   2. an already-installed `statem` on PATH (skip this script itself)
+#   3. the statem package bundled in this plugin repo
+#   4. an importable `statem` in the current Python environment
+set -euo pipefail
+
+# 1. Explicit override.
+if [[ -n "${STATEM_REPO:-}" && -f "${STATEM_REPO}/statem/__main__.py" ]]; then
+  cd "${STATEM_REPO}"
+  exec python3 -m statem "$@"
+fi
+
+# 2. Already on PATH (not this script).
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if command -v statem >/dev/null 2>&1 && [[ "$(command -v statem)" != "${SELF}/statem" ]]; then
+  exec statem "$@"
+fi
+
+# 3. Bundled package in this plugin repo (plugin_root/statem).
+PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ -f "${PLUGIN_ROOT}/statem/__main__.py" ]]; then
+  cd "${PLUGIN_ROOT}"
+  exec python3 -m statem "$@"
+fi
+
+# 4. Importable in the environment.
+if python3 -c "import statem" >/dev/null 2>&1; then
+  exec python3 -m statem "$@"
+fi
+
+echo "statem CLI not found. Install statem, set STATEM_REPO, or run from the plugin repo that bundles the statem Python package." >&2
+exit 127

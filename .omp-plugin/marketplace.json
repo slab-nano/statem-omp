@@ -1,0 +1,26 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "statem-omp",
+  "owner": {
+    "name": "statem omp maintainers"
+  },
+  "metadata": {
+    "description": "Stateful runbooks for long-running omp agents.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "statem",
+      "description": "Stateful runbooks for long-running omp agents using the statem CLI.",
+      "source": "./plugins/statem",
+      "version": "0.1.0",
+      "author": {
+        "name": "statem omp maintainers"
+      },
+      "category": "development",
+      "license": "Apache-2.0",
+      "keywords": ["agents", "state-machine", "runbook", "cli", "omp"],
+      "homepage": "https://github.com/slab-nano/statem-omp"
+    }
+  ]
+}
