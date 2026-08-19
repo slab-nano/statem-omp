@@ -43,9 +43,9 @@ The clearest wins for statem are where its core features are exercised: **durabl
 (scenario 5), **enforced verification** that catches a silent bug (scenario 6), and — the big one for throughput —
 **parallel sub-agents on independent runbook leaves** (scenario 10): 4 concurrent agents built a 4-module package
 in **34s vs 25s sequential / 136s statem-sequential**, at identical correctness — though parallel uses 4.2× the
-tokens of the plain baseline (646k vs 153k) while statem-sequential uses 17× (2.6M). On short single-shot tasks statem
-adds overhead (wall-clock and tokens, roughly 2–8×) with no correctness gain. Full methodology, measured per-run
-token counts, and approximate cost (DeepSeek V4 Flash rates) are in [`benchmarks.md`](benchmarks.md), with
+tokens of the plain baseline (326k vs 78k) while statem-sequential uses 17× (1.32M). DeepSeek's cache-read
+pricing (95–98% of input is cached, billed at $0.0028/M) keeps absolute cost tiny (~$0.002–0.01 per run). Full
+methodology and measured per-run token/cost (incl. cache reads) are in [`benchmarks.md`](benchmarks.md), with
 reproducible harness scripts under `benchmarks/`.
 
 ## Requirements

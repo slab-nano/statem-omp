@@ -141,34 +141,35 @@ runbook each time and passed. Functional grades are equal (6/6).
 
 ## Runtime, tokens & cost
 
-**Token counts below are MEASURED**, not estimated — read from omp's per-session usage records
-(`message.usage.totalTokens` for output incl. reasoning, `message.contextSnapshot.promptTokens` for input),
-summed across every message and every session of a run. Wall-clock is measured. Cost uses **DeepSeek V4 Flash**
-public rates: **$0.14/M input (cache miss), $0.28/M output**.
+**All figures below are MEASURED**, read from omp's per-session usage records (which include DeepSeek's cache
+read/write split and a real per-call cost), summed across every message and session of a run. Wall-clock is
+measured. DeepSeek V4 Flash rates: **$0.14/M input (cache miss), $0.0028/M input (cache read), $0.28/M output.**
 
-The three execution modes below are the **same 4-module `sats` package**, run identically apart from orchestration
+The three execution modes are the **same 4-module `sats` package**, run identically apart from orchestration
 (a clean apples-to-apples comparison). All three graded **6/6** (all 20 functions correct).
 
-| Mode | wall clock | input tok | output tok | total tok | est. cost |
-|------|-----------:|----------:|-----------:|----------:|----------:|
-| **sequential** (1 agent) | 25s | 75,014 | 78,369 | **153,383** | ~$0.032 |
-| **parallel** (4 sub-agents + coordinator) | 34s | 321,122 | 325,668 | **646,790** | ~$0.136 |
-| **statem-sequential** (1 agent + runbook) | 136s | 1,306,318 | 1,318,493 | **2,624,811** | ~$0.55 |
+| Mode | wall | in (miss) | in (cache read) | output | **total tok** | **actual cost** |
+|------|-----:|----------:|----------------:|-------:|--------------:|----------------:|
+| **sequential** (1 agent) | 25s | 4,102 | 70,912 | 3,355 | **78,369** | **~$0.002** |
+| **parallel** (4 sub-agents + coordinator) | 34s | 5,474 | 315,648 | 4,546 | **325,668** | **~$0.003** |
+| **statem-sequential** (1 agent + runbook) | 136s | 18,254 | 1,288,064 | 12,175 | **1,318,493** | **~$0.01** |
+
+**The cache effect matters a lot.** ~95–98% of input tokens are **cache reads** (DeepSeek auto-caches the
+repeated prompt prefix across an agent's tool-call loop), billed at **$0.0028/M instead of $0.14/M**. That is why
+the actual costs are so low — and why the earlier blended-rate estimate ($0.168/M on all tokens) overstated cost
+by ~10–20×. Counting cache correctly, the three modes cost roughly **$0.002 / $0.003 / $0.01**.
 
 **What this actually shows:**
 
-- **Parallel is NOT a token saver.** It burns **4.2× the tokens** of the plain sequential agent (646k vs 153k) —
-  each of the 4 sub-agents re-loads ~48k tokens of context, and the coordinator adds ~256k. Parallel's win is
-  **latency only**: 34s vs 25s (sequential) and **4× faster than statem-sequential** (136s).
-- **Statem-sequential is the real token hog: 2,624,811 tokens — 17× the plain baseline.** The runbook `save`/`goto`
-  steps, gate execution, and re-verification balloon the context across 47 messages. Its value is durable state,
-  but on a single clean pass it is by far the most expensive of the three.
-- If your constraint is **cost**, a single sequential agent wins (153k, ~$0.03). If it's **latency + correctness on
-  long multi-module work**, parallel sub-agents beat statem-sequential on both (34s/647k vs 136s/2.6M) while keeping
-  the verify gate.
-
-*(Scenarios 1–9 in the tables above were run before per-run telemetry was enabled; their token/cost figures are
-the earlier estimates and are superseded by this measured comparison for the same task class.)*
+- **Parallel is NOT a token saver.** It burns **4.2× the total tokens** of the plain sequential agent (326k vs
+  78k) — four sub-agents each re-load ~48k of context plus a ~256k coordinator. Its win is **latency only**: 34s
+  vs 25s (sequential) and **4× faster than statem-sequential** (136s).
+- **Statem-sequential is the token hog: 1.32M tokens — 17× the plain baseline.** The runbook `save`/`goto` steps,
+  gate execution, and re-verification balloon the context across 47 messages. It stays cheap in absolute dollars
+  only because of cache hits; per token it is still by far the most expensive mode.
+- If your constraint is **cost**, a single sequential agent wins (~$0.002). If it's **latency + correctness on
+  long multi-module work**, parallel sub-agents beat statem-sequential on both (34s/326k vs 136s/1.32M) while
+  keeping the verify gate.
 
 ## Scenario 10 — parallel sub-agents (wall-clock reduction)
 
@@ -177,11 +178,11 @@ Same 4-module sats package, but the four independent module leaves are built by 
 gate. All three variants graded **6/6** (all 20 functions correct). **Token counts are measured** (see
 "Runtime, tokens & cost").
 
-| Variant | wall clock | total tokens | result |
-|---------|-----------:|-------------:|--------|
-| sequential baseline | 25s | 153,383 | 6/6 |
-| statem-sequential | 136s | 2,624,811 | 6/6 |
-| **parallel (4 sub-agents + coordinator)** | **34s** | 646,790 | 6/6 |
+| Variant | wall clock | total tokens | actual cost | result |
+|---------|-----------:|-------------:|------------:|--------|
+| sequential baseline | 25s | 78,369 | ~$0.002 | 6/6 |
+| statem-sequential | 136s | 1,318,493 | ~$0.01 | 6/6 |
+| **parallel (4 sub-agents + coordinator)** | **34s** | 325,668 | ~$0.003 | 6/6 |
 
 **Finding — this answers "can statem's work be parallelized with sub-agents?":** statem's runbook *spine* is
 sequential (a single pointer through gated nodes), but the **leaf nodes are embarrassingly parallel**. Splitting
@@ -189,10 +190,12 @@ the four independent modules across four concurrent sub-agents cut wall-clock to
 baseline and 4× faster than statem-sequential**, at identical correctness. The durable-state / verify-gate value
 is preserved: the coordinator still runs the merge + verify gate.
 
-**Cost trade-off — parallelism buys latency, not tokens.** Measured, parallel uses **646,790 tokens = 4.2× the
-plain baseline** (153k) because four sub-agents each re-load ~48k tokens of context plus a ~256k coordinator.
-But statem-sequential is the real outlier at **2.6M tokens (17× baseline)**. So: cost-sensitive → sequential
-baseline; latency + correctness on long work → parallel sub-agents beat statem-sequential on both dimensions.
+**Cost trade-off — parallelism buys latency, not tokens.** Measured (with cache reads counted), parallel uses
+**325,668 tokens = 4.2× the plain baseline** (78k) because four sub-agents each re-load ~48k of context plus a
+~256k coordinator. Statem-sequential is the real outlier at **1.32M tokens (17× baseline)**. Because ~95–98% of
+input is cache-read (billed at $0.0028/M), the absolute costs stay tiny (~$0.002 / $0.003 / $0.01). So:
+cost-sensitive → sequential baseline; latency + correctness on long work → parallel sub-agents beat
+statem-sequential on both dimensions.
 
 ## Can statem's work be parallelized with sub-agents?
 
@@ -210,7 +213,7 @@ depends on the previous node's state and gates. So the runbook *execution* canno
 In this harness we ran everything as one omp agent per session (no sub-agents), so the numbers above are the
 sequential baseline. **Scenario 10 measures the parallel variant** and confirms the win on latency: 34s vs 25s
 (sequential) / 136s (statem-sequential) at identical correctness. The catch is tokens: parallel uses 4.2× the
-plain baseline (646k vs 153k) but far fewer than statem-sequential (2.6M). So the answer is yes — parallel
+plain baseline (326k vs 78k) but far fewer than statem-sequential (1.32M). So the answer is yes — parallel
 sub-agents cut wall-clock on multi-module runbooks, at the cost of merge + gate coordination and more total
 tokens than a single baseline agent.
 
