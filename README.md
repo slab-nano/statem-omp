@@ -18,6 +18,25 @@ through state-aware runbooks without losing sight of long-running work.
   - `examples/coding-agent.yaml` — a starter runbook.
   - `integrations/hooks/statem_stop_hook.py` — optional auto-loop Stop hook.
 
+## Benchmarks
+
+We ran controlled baseline-vs-statem comparisons with DeepSeek-V4-Flash through omp.
+Bottom line: statem adds overhead and no correctness win on short single-shot tasks, and it is
+**not magic** (a weak verify gate gives weak protection) — but it **wins where it's designed to**:
+durable state across a context wipe, where baseline loses the contract and statem resumes from its
+runbook and passes.
+
+| Scenario | baseline | statem |
+|----------|----------|--------|
+| short 4-step build | ✅ PASS | ✅ PASS |
+| large 20-fn 9-phase build | ✅ PASS | ✅ PASS |
+| git-webserver deploy (TB 2.1 task) | ✅ PASS | ✅ PASS |
+| two-session build, subtle drift | ❌ FAIL | ❌ FAIL |
+| **two-session build, context wiped** | ❌ FAIL | ✅ **PASS** |
+
+Full methodology, task details, timing, and the exact failure modes are in
+[`benchmarks.md`](benchmarks.md), with reproducible harness scripts under `benchmarks/`.
+
 ## Requirements
 
 - omp (oh-my-pi) — `curl -fsSL https://omp.sh/install | sh`
@@ -50,7 +69,6 @@ omp -p /extensions   # the statem skill should appear
 
 The skill is loaded on demand. In a task, ask omp to "create a statem runbook for this
 task" or drive statem directly:
-
 ```sh
 statem validate statem.yaml --json
 statem start statem.yaml --run-id myrun --json
