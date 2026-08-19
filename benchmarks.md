@@ -17,7 +17,8 @@ baseline omp run (no skill). All runs are real executions; none are fabricated.
 | 6 | Verify-gate repair loop (string-input drift) | does a strict gate catch a silent bug? | ❌ FAIL (1/2) | ✅ **PASS (2/2)** |
 | 7 | Resume-with-repair (even-length median bug) | does durable failure state survive a wipe? | ✅ PASS (2/2) | ✅ PASS (2/2) |
 | 8 | Invalid-transition blocking (release gate) | does a gate block skipping tests? | ✅ PASS (4/4) | ✅ PASS (4/4) |
-| 9 | Three-session resume (two context wipes) | durable state across a longer interruption chain | ✅ PASS (6/6) | ✅ PASS (6/6)† |
+| 9 | Three-session resume (two context wipes) | durable state across a longer interruption chain | ✅ PASS (6/6) | ✅ PASS (6/6) |
+| 10 | Parallel sub-agents (4 modules) | can independent leaves cut wall-clock? | — | ✅ PASS (6/6) in 62s |
 
 Scores are objective: an external hidden grader (independent of the agent's own self-checks).
 
@@ -132,9 +133,9 @@ Baseline inferred the non-inferable API from the domain across both wipes and pa
 runbook each time and passed. Functional grades are equal (6/6).
 
 - baseline: PASS (6/6). statem: PASS (6/6).
-- † caveat: statem's **session 3 was cut short by a `402 Insufficient Balance`** (the DeepSeek API key ran out of
-  funds mid-run). The four modules were already implemented in sessions 1–2, so the functional 20-function grade
-  still passes, but verify.py/README were not completed in that final session.
+- Note: the first statem run of this scenario was interrupted mid-session-3 by a `402 Insufficient Balance`
+  (DeepSeek API balance exhausted); after a top-up it was re-run to completion cleanly (all three sessions,
+  ending at `done` with the verify gate enforced). The numbers below are the completed run.
 
 ---
 
@@ -157,15 +158,34 @@ output** → blended ~**$0.168/M** (80/20 input/output split).
 | 8 release gate | baseline | 70s | ~210k | ~$0.035 |
 | 8 release gate | statem | 70s | ~210k | ~$0.035 |
 | 9 three-session | baseline | 107s | ~321k | ~$0.054 |
-| 9 three-session | statem | 230s* | ~690k | ~$0.12 |
-
-\* statem session 3 was interrupted by the API balance (`402`); runtime shown is through the interruption.
+| 9 three-session | statem | 323s | ~969k | ~$0.16 |
+| 10 parallel sub-agents | statem-parallel | **62s** | ~240k | ~$0.040 |
 
 **Takeaway on cost/overhead:** DeepSeek V4 Flash is extremely cheap — every run here is on the order of
-$0.01–$0.12. Statem consistently spends **more** wall-clock and tokens (roughly 2–8×) because the runbook,
-`save`/`goto` transitions, and verify gates add real work and reasoning. In the cases where statem wins (5, 6) it
-buys correctness; in the null cases (7, 8, 9) it buys the same answer for more tokens. Whether that premium is
-worth it depends on how much you value surviving context loss vs. raw throughput on a cheap, capable model.
+$0.01–$0.16. Statem's sequential runs consistently spend **more** wall-clock and tokens (roughly 2–8×) because
+the runbook, `save`/`goto` transitions, and verify gates add real work and reasoning. In the cases where statem
+wins (5, 6) it buys correctness; in the null cases (7, 8, 9) it buys the same answer for more tokens. The
+**parallel sub-agent** variant is the exception — see scenario 10.
+
+## Scenario 10 — parallel sub-agents (wall-clock reduction)
+
+Same 4-module sats package, but the four independent module leaves are built by **four concurrent omp agents**
+(each writes its own `*.py`), then a single coordinator writes `__init__.py` + `verify.py` and runs the verify
+gate. All 20 functions graded correct (6/6), identical to the sequential runs.
+
+| Variant | wall clock | result |
+|---------|-----------:|--------|
+| sequential baseline | 107s | 6/6 |
+| statem-sequential | 323s | 6/6 |
+| **statem-parallel (4 sub-agents + coordinator)** | **62s** | 6/6 |
+
+**Finding — this answers "can statem's work be parallelized with sub-agents?":** statem's runbook *spine* is
+sequential (a single pointer through gated nodes), but the **leaf nodes are embarrassingly parallel**. Splitting
+the four independent modules across four concurrent sub-agents cut wall-clock to **62s — 1.7× faster than the
+sequential baseline and 5.2× faster than statem-sequential**, with identical correctness. The durable-state /
+verify-gate value is preserved: the coordinator still runs the merge + verify gate. The trade-off is coordination
+complexity (shared repo, merge, gate) and more total tokens than a single baseline agent (~240k vs ~321k), though
+still far fewer tokens than statem-sequential (~969k).
 
 ## Can statem's work be parallelized with sub-agents?
 
@@ -181,8 +201,10 @@ depends on the previous node's state and gates. So the runbook *execution* canno
   ordered, gated spine (which phases are done, which gate must pass before merge/handoff).
 
 In this harness we ran everything as one omp agent per session (no sub-agents), so the numbers above are the
-sequential baseline. A parallel-sub-agent statem variant is a natural next experiment: expected to cut
-wall-clock on multi-module tasks at the cost of coordinating merge + gate.
+sequential baseline. **Scenario 10 measures the parallel variant** and confirms the expected win: 62s vs 107s
+(sequential) / 323s (statem-sequential) at identical correctness. So the answer is yes — parallel sub-agents
+cut wall-clock on multi-module runbooks, at the cost of merge + gate coordination and slightly more total tokens
+than a single baseline agent.
 
 ---
 
@@ -193,6 +215,7 @@ The harness scripts live in the repo:
 - `benchmarks/git-webserver/` — scenario 3 (docker-free TB 2.1 task)
 - `benchmarks/resume/` — scenarios 4 & 5 (two-session resume)
 - `benchmarks/scenarios/` — scenarios 6–9 (verify-gate, resume-repair, release gate, three-session)
+- `benchmarks/scenarios/run_parallel.sh` — scenario 10 (parallel sub-agents)
 
 ```bash
 # scenario 3, baseline then statem

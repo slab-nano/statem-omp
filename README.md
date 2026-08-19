@@ -37,9 +37,12 @@ runbook and passes.
 | resume-with-repair (median bug) | ✅ PASS | ✅ PASS |
 | release gate (block skipping tests) | ✅ PASS | ✅ PASS |
 | three-session resume (2 wipes) | ✅ PASS | ✅ PASS |
+| **parallel sub-agents (4 modules)** | — | ✅ PASS in **62s** |
 
 The clearest wins for statem are where its core features are exercised: **durable state across a context wipe**
-(scenario 5) and **enforced verification** that catches a silent bug (scenario 6). On short single-shot tasks it
+(scenario 5), **enforced verification** that catches a silent bug (scenario 6), and — the big one for throughput —
+**parallel sub-agents on independent runbook leaves** (scenario 10): 4 concurrent agents built a 4-module package
+in **62s vs 107s sequential / 323s statem-sequential**, at identical correctness. On short single-shot tasks statem
 adds overhead (wall-clock and tokens, roughly 2–8×) with no correctness gain. Full methodology, per-task
 wall-clock / estimated tokens / approximate cost (DeepSeek V4 Flash rates), and a sub-agent parallelization
 discussion are in [`benchmarks.md`](benchmarks.md), with reproducible harness scripts under `benchmarks/`.
