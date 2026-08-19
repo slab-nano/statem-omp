@@ -143,9 +143,10 @@ runbook each time and passed. Functional grades are equal (6/6).
 
 Wall-clock times below are measured. **Token counts are estimates** — omp's `-p --no-session` runs did not
 persist per-run usage telemetry, and the API balance ran out before I could re-run with logging enabled.
-Estimated tokens use a rule of ~3,000 tokens/sec of wall-clock (input context resends across tool-call loops
-plus reasoning output). Cost uses **DeepSeek V4 Flash** public rates: **$0.14/M input (cache miss), $0.28/M
-output** → blended ~**$0.168/M** (80/20 input/output split).
+Estimated tokens use ~3,000 tokens/sec of **agent-seconds** (each agent's run duration summed; for the parallel
+run that is 4 sub-agents + 1 coordinator, NOT the 62s wall-clock, since concurrent agents burn tokens
+simultaneously). Cost uses **DeepSeek V4 Flash** public rates: **$0.14/M input (cache miss), $0.28/M output** →
+blended ~**$0.168/M** (80/20 input/output split).
 
 | Scenario | Trial | wall clock | est. tokens | est. cost |
 |----------|-------|-----------:|------------:|----------:|
@@ -159,7 +160,7 @@ output** → blended ~**$0.168/M** (80/20 input/output split).
 | 8 release gate | statem | 70s | ~210k | ~$0.035 |
 | 9 three-session | baseline | 107s | ~321k | ~$0.054 |
 | 9 three-session | statem | 323s | ~969k | ~$0.16 |
-| 10 parallel sub-agents | statem-parallel | **62s** | ~240k | ~$0.040 |
+| 10 parallel sub-agents | statem-parallel | **62s** | ~420k | ~$0.071 |
 
 **Takeaway on cost/overhead:** DeepSeek V4 Flash is extremely cheap — every run here is on the order of
 $0.01–$0.16. Statem's sequential runs consistently spend **more** wall-clock and tokens (roughly 2–8×) because
@@ -183,9 +184,14 @@ gate. All 20 functions graded correct (6/6), identical to the sequential runs.
 sequential (a single pointer through gated nodes), but the **leaf nodes are embarrassingly parallel**. Splitting
 the four independent modules across four concurrent sub-agents cut wall-clock to **62s — 1.7× faster than the
 sequential baseline and 5.2× faster than statem-sequential**, with identical correctness. The durable-state /
-verify-gate value is preserved: the coordinator still runs the merge + verify gate. The trade-off is coordination
-complexity (shared repo, merge, gate) and more total tokens than a single baseline agent (~240k vs ~321k), though
-still far fewer tokens than statem-sequential (~969k).
+verify-gate value is preserved: the coordinator still runs the merge + verify gate.
+
+**Cost trade-off — parallelism buys latency, not tokens.** Measured by **agent-seconds** (each agent's runtime
+summed), the parallel run burns ~140 agent-sec ≈ **~420k tokens** — *more* than the single baseline agent
+(~321k, from 4 agents loading context + a coordinator), but *far fewer* than statem-sequential (~969k, which
+re-does runbook setup + verification across 3 sessions). So parallel sub-agents are the right tool when
+**wall-clock latency** matters; if **total tokens / cost** is the constraint, a single sequential baseline agent
+is cheapest, and statem-sequential is the most expensive of the three.
 
 ## Can statem's work be parallelized with sub-agents?
 
