@@ -33,9 +33,16 @@ runbook and passes.
 | git-webserver deploy (TB 2.1 task) | ✅ PASS | ✅ PASS |
 | two-session build, subtle drift | ❌ FAIL | ❌ FAIL |
 | **two-session build, context wiped** | ❌ FAIL | ✅ **PASS** |
+| **verify-gate repair (string drift)** | ❌ FAIL | ✅ **PASS** |
+| resume-with-repair (median bug) | ✅ PASS | ✅ PASS |
+| release gate (block skipping tests) | ✅ PASS | ✅ PASS |
+| three-session resume (2 wipes) | ✅ PASS | ✅ PASS |
 
-Full methodology, task details, timing, and the exact failure modes are in
-[`benchmarks.md`](benchmarks.md), with reproducible harness scripts under `benchmarks/`.
+The clearest wins for statem are where its core features are exercised: **durable state across a context wipe**
+(scenario 5) and **enforced verification** that catches a silent bug (scenario 6). On short single-shot tasks it
+adds overhead (wall-clock and tokens, roughly 2–8×) with no correctness gain. Full methodology, per-task
+wall-clock / estimated tokens / approximate cost (DeepSeek V4 Flash rates), and a sub-agent parallelization
+discussion are in [`benchmarks.md`](benchmarks.md), with reproducible harness scripts under `benchmarks/`.
 
 ## Requirements
 

@@ -14,6 +14,10 @@ baseline omp run (no skill). All runs are real executions; none are fabricated.
 | 3 | Git-webserver deploy (Terminal-Bench 2.1 task, docker-free) | real multi-service terminal task | ✅ PASS (21s) | ✅ PASS (107s) |
 | 4 | Two-session build, subtle contract drift | does a verify gate catch drift? | ❌ FAIL (8/9) | ❌ FAIL (8/9) |
 | 5 | Two-session build, non-inferable API, context wiped | does durable state survive a context wipe? | ❌ FAIL (5/6) | ✅ **PASS (6/6)** |
+| 6 | Verify-gate repair loop (string-input drift) | does a strict gate catch a silent bug? | ❌ FAIL (1/2) | ✅ **PASS (2/2)** |
+| 7 | Resume-with-repair (even-length median bug) | does durable failure state survive a wipe? | ✅ PASS (2/2) | ✅ PASS (2/2) |
+| 8 | Invalid-transition blocking (release gate) | does a gate block skipping tests? | ✅ PASS (4/4) | ✅ PASS (4/4) |
+| 9 | Three-session resume (two context wipes) | durable state across a longer interruption chain | ✅ PASS (6/6) | ✅ PASS (6/6)† |
 
 Scores are objective: an external hidden grader (independent of the agent's own self-checks).
 
@@ -90,23 +94,124 @@ targets (long runs, context refresh), and it is where the plugin pays for itself
 
 ---
 
+## Scenario 6 — verify-gate repair loop (string-input drift) ✅ statem win
+
+Single session. Implement `cal.weekdays_between(a, b)` counting weekdays between two dates inclusive. The
+contract requires **ISO string** inputs. Baseline naturally implemented `date`-object inputs and its own
+self-check used `date` objects, so it passed its own check but **failed** the hidden grader (`TypeError: 'str'
+and 'str'`). Statem's runbook had a **strict `before_transfer` gate that tested string inputs**, which failed,
+blocked the agent from leaving `verify`, and forced it to fix `cal.py` to accept strings — then the gate passed.
+
+- baseline: FAIL (1/2) — silent string-input drift, loose self-check missed it.
+- statem: PASS (2/2) — enforced gate caught and repaired the bug.
+
+**Finding:** this is the honest win for **enforced verification**. Contrast with scenario 4: statem is only as
+good as its gate. Here the runbook gate tested the *real* contract (string inputs), so it caught what a loose
+self-check missed.
+
+## Scenario 7 — resume-with-repair (even-length median bug)
+
+Two sessions, context wiped. The subtle bug: `median()` wrong for even-length lists (e.g. `median([1,3,2,4])`).
+Both trials happened to implement even-length median correctly, so **both passed** the hidden grader — no
+difference. Statem did record and carry its failure/verify state correctly across the wipe.
+
+- baseline: PASS (2/2). statem: PASS (2/2). **Null result** — baseline just got the subtle rule right this time.
+
+## Scenario 8 — invalid-transition blocking (release gate)
+
+Single session. Build `svc/app.parse_version` with a release step that requires green tests. Statem's runbook
+forced `implement → test → release` (a `before_transfer` pytest gate blocks `release` unless green). Both trials
+implemented `parse_version` correctly and produced a valid release, so **both passed** — no difference.
+
+- baseline: PASS (4/4). statem: PASS (4/4). **Null result** — baseline didn't rush/skip this time.
+
+## Scenario 9 — three-session resume (two context wipes)
+
+The scenario-5 design stretched across three sessions and two wipes (framer+link → eph+decoder → verify+docs).
+Baseline inferred the non-inferable API from the domain across both wipes and passed; statem resumed from its
+runbook each time and passed. Functional grades are equal (6/6).
+
+- baseline: PASS (6/6). statem: PASS (6/6).
+- † caveat: statem's **session 3 was cut short by a `402 Insufficient Balance`** (the DeepSeek API key ran out of
+  funds mid-run). The four modules were already implemented in sessions 1–2, so the functional 20-function grade
+  still passes, but verify.py/README were not completed in that final session.
+
+---
+
+## Runtime, tokens & cost
+
+Wall-clock times below are measured. **Token counts are estimates** — omp's `-p --no-session` runs did not
+persist per-run usage telemetry, and the API balance ran out before I could re-run with logging enabled.
+Estimated tokens use a rule of ~3,000 tokens/sec of wall-clock (input context resends across tool-call loops
+plus reasoning output). Cost uses **DeepSeek V4 Flash** public rates: **$0.14/M input (cache miss), $0.28/M
+output** → blended ~**$0.168/M** (80/20 input/output split).
+
+| Scenario | Trial | wall clock | est. tokens | est. cost |
+|----------|-------|-----------:|------------:|----------:|
+| 5 sats resume | baseline | 129s | ~387k | ~$0.065 |
+| 5 sats resume | statem | 238s | ~714k | ~$0.12 |
+| 6 verify-gate | baseline | 21s | ~63k | ~$0.011 |
+| 6 verify-gate | statem | 85s | ~255k | ~$0.043 |
+| 7 resume-repair | baseline | 30s | ~90k | ~$0.015 |
+| 7 resume-repair | statem | 243s | ~729k | ~$0.12 |
+| 8 release gate | baseline | 70s | ~210k | ~$0.035 |
+| 8 release gate | statem | 70s | ~210k | ~$0.035 |
+| 9 three-session | baseline | 107s | ~321k | ~$0.054 |
+| 9 three-session | statem | 230s* | ~690k | ~$0.12 |
+
+\* statem session 3 was interrupted by the API balance (`402`); runtime shown is through the interruption.
+
+**Takeaway on cost/overhead:** DeepSeek V4 Flash is extremely cheap — every run here is on the order of
+$0.01–$0.12. Statem consistently spends **more** wall-clock and tokens (roughly 2–8×) because the runbook,
+`save`/`goto` transitions, and verify gates add real work and reasoning. In the cases where statem wins (5, 6) it
+buys correctness; in the null cases (7, 8, 9) it buys the same answer for more tokens. Whether that premium is
+worth it depends on how much you value surviving context loss vs. raw throughput on a cheap, capable model.
+
+## Can statem's work be parallelized with sub-agents?
+
+Statem itself is **sequential by design** — a run is a single pointer advancing through nodes, and each `goto`
+depends on the previous node's state and gates. So the runbook *execution* cannot be trivially split. But the
+**leaves of a runbook can**:
+
+- Independent sibling nodes (e.g. implementing four independent modules) are natural sub-agent candidates.
+  Launch them in parallel, each writing to its own working file, then have a coordinator run the `verify` node
+  against the merged result. This can cut wall-clock substantially on a multi-module runbook (e.g. scenario 9's
+  four modules could be 4 parallel sub-agents instead of 4 sequential sessions).
+- The durable-state benefit is orthogonal: sub-agents do the parallel leaf work; statem still owns the
+  ordered, gated spine (which phases are done, which gate must pass before merge/handoff).
+
+In this harness we ran everything as one omp agent per session (no sub-agents), so the numbers above are the
+sequential baseline. A parallel-sub-agent statem variant is a natural next experiment: expected to cut
+wall-clock on multi-module tasks at the cost of coordinating merge + gate.
+
+---
+
 ## How to reproduce
 
-The harness scripts used for scenarios 3–5 live in the repo:
+The harness scripts live in the repo:
 
 - `benchmarks/git-webserver/` — scenario 3 (docker-free TB 2.1 task)
 - `benchmarks/resume/` — scenarios 4 & 5 (two-session resume)
+- `benchmarks/scenarios/` — scenarios 6–9 (verify-gate, resume-repair, release gate, three-session)
 
 ```bash
 # scenario 3, baseline then statem
 bash benchmarks/git-webserver/run_trial.sh baseline
 bash benchmarks/git-webserver/run_trial.sh statem
 
-# scenario 5, baseline then statem
+# scenario 5 (and 4), baseline then statem
 bash benchmarks/resume/run_sats.sh baseline
 bash benchmarks/resume/run_sats.sh statem
 bash benchmarks/resume/score_sats.sh /tmp/sats_baseline
 bash benchmarks/resume/score_sats.sh /tmp/sats_statem
+
+# scenarios 6–9 (A–D), baseline then statem
+for s in A B C D; do
+  bash benchmarks/scenarios/run_$s.sh baseline
+  bash benchmarks/scenarios/run_$s.sh statem
+  bash benchmarks/scenarios/score_$s.sh /tmp/$(echo $s | tr A-Z a-z)_baseline
+  bash benchmarks/scenarios/score_$s.sh /tmp/$(echo $s | tr A-Z a-z)_statem
+done
 ```
 
-Requires: `omp` (oh-my-pi), the statem plugin, `statem` on PATH, git + python3.
+Requires: `omp` (oh-my-pi), the statem plugin, `statem` on PATH, git + python3 + pytest.
